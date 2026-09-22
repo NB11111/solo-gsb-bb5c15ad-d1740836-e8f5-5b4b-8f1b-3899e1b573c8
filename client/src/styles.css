@@ -72,7 +72,7 @@ header.app-header p { margin: 0; color: #aeb8cc; font-size: 13px; }
 /* ---------- 调色板编辑 ---------- */
 .palette-row {
   display: grid;
-  grid-template-columns: 38px 1fr 70px 28px;
+  grid-template-columns: 38px 1fr 70px 28px 28px;
   gap: 8px;
   align-items: center;
   margin-bottom: 8px;
@@ -288,3 +288,88 @@ td.cell-ok { background: var(--f5fbf7); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 footer { text-align: center; color: var(--ink-2); font-size: 12px; padding: 10px 0 30px; }
+
+/* ---------- SVG 导入 ---------- */
+.svg-import-panel .dropzone {
+  border: 2px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 18px 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+  background: #fafbfd;
+}
+.svg-import-panel .dropzone:hover { border-color: var(--accent); }
+.svg-import-panel .dropzone.dragging {
+  border-color: var(--accent); background: var(--accent-soft);
+}
+.svg-import-panel .dropzone:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.svg-import-panel .drop-icon { font-size: 26px; line-height: 1; }
+.svg-import-panel .drop-text { margin-top: 6px; font-size: 13px; }
+.svg-import-panel .drop-text code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  background: #eef1f5; padding: 0 5px; border-radius: 4px;
+}
+.svg-import-panel .drop-sub { margin-top: 6px; font-size: 11.5px; color: var(--ink-2); }
+
+.svg-file-bar {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px; flex-wrap: wrap;
+}
+.svg-filename {
+  font-size: 12.5px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 200px;
+}
+button.btn.tiny { padding: 3px 10px; font-size: 12px; }
+
+.info-box {
+  background: var(--accent-soft); border: 1px solid #c5d5f5; color: #1f439b;
+  border-radius: 8px; padding: 8px 12px; margin-top: 10px; font-size: 12.5px;
+}
+
+.ref-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 26px; height: 24px; padding: 0 5px;
+  font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums;
+  background: var(--accent-soft); color: var(--accent);
+  border: 1px solid #c5d5f5; border-radius: 6px;
+  cursor: help; white-space: nowrap;
+}
+.ref-badge.placeholder { background: none; border-color: transparent; }
+
+/* ---------- SVG 预览 / 下载 ---------- */
+.svg-preview-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+}
+.svg-preview-grid figure { margin: 0; }
+.svg-preview-grid figcaption {
+  font-size: 12px; color: var(--ink-2); margin-bottom: 5px; font-weight: 600;
+}
+.svg-preview-box {
+  border: 1px solid var(--line); border-radius: 8px;
+  background: #fff; padding: 10px;
+  min-height: 120px; max-height: 300px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.svg-preview-box.modified { background-image:
+  linear-gradient(45deg, #f0f1f4 25%, transparent 25%),
+  linear-gradient(-45deg, #f0f1f4 25%, transparent 25%),
+  linear-gradient(45deg, transparent 75%, #f0f1f4 75%),
+  linear-gradient(-45deg, transparent 75%, #f0f1f4 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+.svg-preview-img { max-width: 100%; max-height: 280px; width: auto; height: auto; }
+
+.svg-change-row {
+  display: flex; align-items: center; gap: 10px; margin-top: 12px; flex-wrap: wrap;
+}
+.svg-changes { display: flex; gap: 8px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.change-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; border: 1px solid var(--line); border-radius: 999px;
+  padding: 3px 10px; background: #fafbfd;
+}
+.change-chip code { font-family: ui-monospace, Menlo, Consolas, monospace; }
+.change-chip .arrow { color: var(--ink-2); }

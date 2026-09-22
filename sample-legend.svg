@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="360" height="180" viewBox="0 0 360 180">
+  <title>示例图例：含 HEX / RGB / HSL / 内联 style / 渐变 / none / currentColor</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef2f7"/>
+      <stop offset="1" stop-color="#dfe6f0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="360" height="180" fill="url(#bg)"/>
+
+  <!-- 图形颜色：fill / stroke 属性，HEX 与 RGB -->
+  <rect x="20" y="24" width="34" height="22" fill="#d62728" stroke="#8c1a1a"/>
+  <rect x="20" y="60" width="34" height="22" fill="rgb(44, 160, 44)" stroke="none"/>
+
+  <!-- 内联 style 中的 fill / stroke（HSL 写法，含应保留的 stroke-width） -->
+  <path d="M20 100 h34 v22 h-34 z"
+        style="fill: hsl(210, 70%, 45%); stroke: #274a80; stroke-width: 2"/>
+
+  <!-- 等价色：#f28e2b 与 rgb(242,142,43) 归一化后应合并为一项 -->
+  <circle cx="92" cy="35" r="11" fill="#f28e2b"/>
+  <circle cx="120" cy="35" r="11" fill="rgb(242, 142, 43)"/>
+
+  <!-- 半透明色：归一化按合成到白底计算 -->
+  <rect x="84" y="60" width="56" height="22" fill="rgba(90, 80, 140, 0.55)"/>
+
+  <!-- 应被忽略：currentColor 与 none -->
+  <text x="84" y="122" font-size="13" fill="currentColor">文字描边色</text>
+  <line x1="84" y1="130" x2="140" y2="130" stroke="currentColor" stroke-width="2"/>
+  <rect x="150" y="24" width="34" height="22" fill="none" stroke="#444444"/>
+
+  <!-- 图例文字 -->
+  <text x="64" y="40" font-size="13" fill="#1c2330">红（HEX 描边）</text>
+  <text x="64" y="76" font-size="13" fill="#1c2330">绿（rgb，无描边）</text>
+  <text x="64" y="116" font-size="13" fill="#1c2330">蓝（内联 style / HSL）</text>
+  <text x="140" y="40" font-size="13" fill="#1c2330">橙 ×2（等价合并）</text>
+  <text x="146" y="76" font-size="13" fill="#1c2330">紫（半透明）</text>
+  <text x="192" y="40" font-size="13" fill="#1c2330">灰描边（fill none）</text>
+</svg>

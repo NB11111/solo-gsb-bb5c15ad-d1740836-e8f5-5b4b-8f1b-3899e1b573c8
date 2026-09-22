@@ -1,5 +1,17 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { analyze, recommend, getModes } from './api.js';
+import {
+  MAX_SVG_COLORS,
+  MAX_SVG_BYTES,
+  parseSvgText,
+  extractSvgColors,
+  buildModifiedSvg,
+  groupLabel,
+  describeRef,
+  downloadText,
+  outputSvgName,
+  isHex6,
+} from './svgImport.js';
 
 /* ---------------- 预设调色板 ---------------- */
 const PRESETS = [
@@ -70,6 +82,14 @@ export default function App() {
   const [rec, setRec] = useState(null);
   const [recLoading, setRecLoading] = useState(false);
 
+  // SVG 图例导入：全部在浏览器本地完成，文件内容不会上传服务器
+  // svg: { name, doc, totalRefs, skipped }
+  const [svg, setSvg] = useState(null);
+  const [svgError, setSvgError] = useState(null);
+  const [svgInfo, setSvgInfo] = useState(null);
+  const [svgDragging, setSvgDragging] = useState(false);
+  const fileInputRef = useRef(null);
+
   useEffect(() => {
     getModes().then(setModeMeta).catch(() => {});
   }, []);
@@ -121,6 +141,130 @@ export default function App() {
   };
   const removeColor = (i) =>
     setPalette((ps) => (ps.length > 2 ? ps.filter((_, k) => k !== i) : ps));
+
+  /* ---------- SVG 图例导入（纯本地解析） ---------- */
+  const importSvgFile = useCallback(async (file) => {
+    setSvgError(null);
+    setSvgInfo(null);
+    setError(null);
+    if (!file) return;
+    if (!/\.svg$/i.test(file.name) && file.type && file.type !== 'image/svg+xml') {
+      setSvgError('请选择 .svg 文件');
+      return;
+    }
+    if (file.size > MAX_SVG_BYTES) {
+      setSvgError(`文件过大（${(file.size / 1024 / 1024).toFixed(1)} MB），请使用 2 MB 以内的 SVG`);
+      return;
+    }
+    let text;
+    try {
+      text = await file.text();
+    } catch {
+      setSvgError('文件读取失败，请重试');
+      return;
+    }
+
+    let doc;
+    try {
+      doc = parseSvgText(text);
+    } catch (e) {
+      setSvgError(e.message);
+      return;
+    }
+    const { groups, totalRefs, skipped } = extractSvgColors(doc);
+    if (!groups.length) {
+      setSvgError('未在该 SVG 中发现可用的纯色（fill / stroke 的 HEX、RGB、HSL）');
+      return;
+    }
+
+    const kept = groups.slice(0, MAX_SVG_COLORS);
+    const overflow = groups.length - kept.length;
+    const rows = kept.map((g) => ({
+      hex: g.hex,
+      originalHex: g.hex,
+      label: groupLabel(g),
+      refs: g.refs,
+    }));
+    setPalette(rows);
+    setSvg({
+      name: file.name,
+      doc,
+      originalText: text,
+      groups,
+      totalRefs,
+      skipped,
+      groupCount: groups.length,
+    });
+    setTargetIndex(0);
+    setRec(null);
+    setMarkedTarget(null);
+
+    const parts = [
+      `发现 ${groups.length} 种纯色、${totalRefs} 处 fill/stroke 引用，已载入校验`,
+    ];
+    if (overflow > 0) {
+      parts.push(`；超出 ${MAX_SVG_COLORS} 色上限的 ${overflow} 种颜色不参与校验，导出时保持原值`);
+    }
+    if (skipped > 0) {
+      parts.push(`；已忽略 ${skipped} 处 none / currentColor / 渐变 / 外链涂料引用`);
+    }
+    if (groups.length < 2) {
+      parts.push('。仅 1 种颜色无法做色对校验，可在下方手动添加颜色后运行');
+    }
+    setSvgInfo(parts.join(''));
+
+    if (rows.length >= 2) {
+      // 导入结果直接进入现有多模式校验
+      const p = {
+        colors: rows.map((r) => r.hex),
+        modes: enabledModes,
+        threshold: Number(threshold),
+        severity: Number(severity),
+      };
+      try {
+        const data = await analyze(p);
+        setResult(data);
+        if (!data.modes.some((m) => m.id === activeMode)) setActiveMode(data.modes[0].id);
+      } catch (e) {
+        setError(e.message);
+      }
+    } else {
+      setResult(null);
+    }
+  }, [enabledModes, threshold, severity, activeMode]);
+
+  const handleSvgSelect = (e) => {
+    const file = e.target.files && e.target.files[0];
+    importSvgFile(file);
+    e.target.value = ''; // 允许再次选择同一文件
+  };
+
+  const handleSvgDrop = (e) => {
+    e.preventDefault();
+    setSvgDragging(false);
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    importSvgFile(file);
+  };
+
+  const clearSvg = () => {
+    setSvg(null);
+    setSvgError(null);
+    setSvgInfo(null);
+    setPalette(PRESETS[0].colors.map((c) => ({ ...c })));
+    setTargetIndex(0);
+    setRec(null);
+    setMarkedTarget(null);
+    runAnalyze();
+  };
+
+  // 当前调色板写回 SVG 后的文本；删除行 / 超出上限 / 非法 hex 的组回归归一化原色
+  const modifiedSvgText = useMemo(
+    () => (svg ? buildModifiedSvg(svg.doc, svg.groups, palette) : null),
+    [svg, palette],
+  );
+  const changedRows = svg
+    ? palette.filter((r) => r.originalHex && r.hex.toLowerCase() !== r.originalHex.toLowerCase())
+    : [];
 
   const toggleMode = (id) =>
     setEnabledModes((ms) => {
@@ -176,6 +320,65 @@ export default function App() {
       <div className="layout">
         {/* ================= 左侧：编辑与设置 ================= */}
         <div>
+          <section className="panel svg-import-panel">
+            <h2>
+              SVG 图例导入
+              <span className="hint">本地解析 · 原文件不上传服务器</span>
+            </h2>
+
+            <div
+              className={`dropzone ${svgDragging ? 'dragging' : ''}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setSvgDragging(true);
+              }}
+              onDragLeave={() => setSvgDragging(false)}
+              onDrop={handleSvgDrop}
+              onClick={() => fileInputRef.current && fileInputRef.current.click()}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') fileInputRef.current?.click();
+              }}
+            >
+              <div className="drop-icon">📄</div>
+              <div className="drop-text">
+                <b>点击选择</b> 或拖拽本地 <code>.svg</code> 文件到此处
+              </div>
+              <div className="drop-sub">
+                解析 fill / stroke 属性与内联 style 中的 HEX、RGB、HSL 纯色；
+                忽略 none、currentColor、渐变与外链涂料
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".svg,image/svg+xml"
+                onChange={handleSvgSelect}
+                hidden
+              />
+            </div>
+
+            {svgError && (
+              <div className="error-box" style={{ marginTop: 10 }}>
+                ⚠ {svgError}
+              </div>
+            )}
+            {svg && (
+              <div className="svg-file-bar">
+                <span className="svg-filename" title={svg.name}>
+                  ✅ {svg.name}
+                </span>
+                <button className="btn tiny" onClick={() => fileInputRef.current?.click()}>
+                  重新选择
+                </button>
+                <button className="btn tiny" onClick={clearSvg}>
+                  移除
+                </button>
+              </div>
+            )}
+            {svgInfo && <div className="info-box">ℹ {svgInfo}</div>}
+          </section>
+
           <section className="panel">
             <h2>
               调色板
@@ -185,7 +388,7 @@ export default function App() {
               <div className="palette-row" key={i}>
                 <input
                   type="color"
-                  value={c.hex}
+                  value={isHex6(c.hex) ? c.hex : '#000000'}
                   onChange={(e) => updateColor(i, { hex: e.target.value })}
                   title="选色"
                 />
@@ -202,6 +405,16 @@ export default function App() {
                   onChange={(e) => updateColor(i, { label: e.target.value })}
                   placeholder="标签"
                 />
+                {c.refs?.length ? (
+                  <span
+                    className="ref-badge"
+                    title={`${c.refs.map(describeRef).join('\n')}`}
+                  >
+                    {c.refs.length}
+                  </span>
+                ) : (
+                  <span className="ref-badge placeholder" />
+                )}
                 <button
                   className="icon-btn"
                   onClick={() => removeColor(i)}
@@ -224,6 +437,12 @@ export default function App() {
                 </button>
               ))}
             </div>
+            {svg && (
+              <p className="range-hint" style={{ marginTop: 8 }}>
+                调色板来自导入的 SVG，色名右侧数字为该色在 SVG 中的引用数（悬停查看明细）；
+                应用推荐色时将同步改写全部引用。
+              </p>
+            )}
           </section>
 
           <section className="panel">
@@ -310,6 +529,15 @@ export default function App() {
 
         {/* ================= 右侧：结果 ================= */}
         <div>
+          {svg && (
+            <SvgPreviewPanel
+              svg={svg}
+              palette={palette}
+              modifiedText={modifiedSvgText}
+              changedRows={changedRows}
+            />
+          )}
+
           {error && <div className="error-box">⚠ {error}</div>}
 
           {!result && !error && <div className="empty-hint">配置调色板后点击“运行校验”。</div>}
@@ -491,6 +719,82 @@ const selectStyle = {
   font: 'inherit',
   background: '#fff',
 };
+
+/* SVG 文本 → Blob URL 的安全预览（<img> 不执行脚本） */
+function SvgImg({ text, alt }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (!text) return undefined;
+    const u = URL.createObjectURL(new Blob([text], { type: 'image/svg+xml;charset=utf-8' }));
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [text]);
+  return <img className="svg-preview-img" src={url || undefined} alt={alt} />;
+}
+
+function SvgPreviewPanel({ svg, palette, modifiedText, changedRows }) {
+  const present = new Set(
+    palette.map((r) => r.originalHex && r.originalHex.toLowerCase()),
+  );
+  const lockedOut = svg.groups.filter((g) => !present.has(g.hex.toLowerCase())).length;
+  return (
+    <section className="panel svg-preview-panel">
+      <h2>
+        修改后 SVG 预览与下载
+        <span className="hint">颜色改动实时同步到全部引用</span>
+      </h2>
+
+      <div className="svg-preview-grid">
+        <figure>
+          <figcaption>原图</figcaption>
+          <div className="svg-preview-box">
+            <SvgImg text={svg.originalText} alt="原始 SVG 图例" />
+          </div>
+        </figure>
+        <figure>
+          <figcaption>应用候选色后</figcaption>
+          <div className="svg-preview-box modified">
+            <SvgImg text={modifiedText} alt="修改后 SVG 图例" />
+          </div>
+        </figure>
+      </div>
+
+      <div className="svg-change-row">
+        <div className="svg-changes">
+          {changedRows.length ? (
+            changedRows.map((r) => (
+              <span className="change-chip" key={r.originalHex}>
+                <span className="cell-swatch" style={{ background: r.originalHex }} />
+                <code>{r.originalHex}</code>
+                <span className="arrow">→</span>
+                <span className="cell-swatch" style={{ background: r.hex }} />
+                <code>{r.hex}</code>
+                <span className="range-hint">×{r.refs.length} 处</span>
+              </span>
+            ))
+          ) : (
+            <span className="range-hint">尚未改动颜色；在“替换色推荐”中点击候选卡即可改写 SVG。</span>
+          )}
+        </div>
+        <button
+          className="btn primary"
+          onClick={() => downloadText(outputSvgName(svg.name), modifiedText)}
+        >
+          ⬇ 下载修改后 SVG
+        </button>
+      </div>
+
+      <p className="range-hint" style={{ marginTop: 8 }}>
+        {svg.groupCount} 种颜色 / {svg.totalRefs} 处引用；
+        {svg.skipped > 0 &&
+          `已忽略 ${svg.skipped} 处 none / currentColor / 渐变 / 外链涂料引用；`}
+        {lockedOut > 0 &&
+          `其中 ${lockedOut} 种颜色未在校验调色板中（超出 8 色上限或已删除），导出时保持归一化原色；`}
+        全部处理均在浏览器本地完成，原文件不会上传服务器。
+      </p>
+    </section>
+  );
+}
 
 function ResultBanner({ result, modeMeta }) {
   const failPairs = result.pairs.filter((p) => !p.pass);
