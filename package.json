@@ -1,0 +1,31 @@
+{
+  "name": "cvd-legend-checker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "色觉安全图例校验台 —— React + Express + culori",
+  "workspaces": [
+    "server",
+    "client"
+  ],
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "node --watch server/index.js",
+    "dev:client": "vite --config client/vite.config.js",
+    "build": "vite build --config client/vite.config.js",
+    "start": "NODE_ENV=production node server/index.js"
+  },
+  "dependencies": {
+    "culori": "^4.0.2",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^5.4.11"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
