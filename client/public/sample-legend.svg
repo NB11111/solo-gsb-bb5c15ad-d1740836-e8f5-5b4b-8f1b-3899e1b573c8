@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 示例图例：含等价颜色写法（#d62728 与 rgb(214,39,40) 会归一化去重）、
+     内联 style、渐变 / currentColor / none 等应被忽略的情况。 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240" viewBox="0 0 320 240">
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e9edf3"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="320" height="240" fill="url(#bgGrad)"/>
+  <rect x="12" y="14" width="296" height="212" rx="10" fill="none" stroke="#c8cdd6" stroke-width="1.5"/>
+
+  <g font-family="sans-serif" font-size="14" fill="#233044">
+    <!-- 类别 1：红色（HEX 写法） -->
+    <rect x="28" y="36" width="26" height="26" rx="4" fill="#d62728" stroke="#233044" stroke-width="1"/>
+    <text x="66" y="54">禁止通行</text>
+
+    <!-- 类别 2：绿色（RGB 写法，与 HEX 等价的红色重复，用于验证去重） -->
+    <rect x="28" y="78" width="26" height="26" rx="4" fill="rgb(44, 160, 44)"/>
+    <text x="66" y="96">安全通行</text>
+
+    <!-- 红色的等价写法出现在描边上，应并入 #d62728 的引用 -->
+    <line x1="28" y1="122" x2="248" y2="122" stroke="rgb(214, 39, 40)" stroke-width="4"
+          stroke-linecap="round"/>
+    <text x="66" y="118" font-size="12" fill="#5a6472">红线分隔（与上方红色等价）</text>
+
+    <!-- 类别 3：内联 style + HSL 纯色 -->
+    <circle cx="41" cy="150" r="13" style="fill: hsl(210, 70%, 49%); stroke:#233044; stroke-width:1"/>
+    <text x="66" y="155">水域（HSL 蓝）</text>
+
+    <!-- 类别 4：半透明橙（alpha=.55）应被忽略 -->
+    <rect x="28" y="172" width="26" height="26" rx="4" fill="rgba(255, 127, 14, 0.55)"/>
+    <text x="66" y="190">施工（半透明，已忽略）</text>
+
+    <!-- 类别 5：currentColor 与 none 应被忽略 -->
+    <g color="#9467bd">
+      <rect x="190" y="172" width="26" height="26" rx="4" fill="currentColor" stroke="none"/>
+      <text x="228" y="190" font-size="12">currentColor（已忽略）</text>
+    </g>
+  </g>
+</svg>

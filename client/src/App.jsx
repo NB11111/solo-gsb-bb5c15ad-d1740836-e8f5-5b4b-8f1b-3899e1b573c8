@@ -1,5 +1,14 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { analyze, recommend, getModes } from './api.js';
+import SvgImportPanel from './SvgImportPanel.jsx';
+import SvgPreviewPanel from './SvgPreviewPanel.jsx';
+import {
+  SvgParseError,
+  importSvgText,
+  normalizeSolidColor,
+  rewriteColor,
+  serializeSvg,
+} from './svg-import.js';
 
 /* ---------------- 预设调色板 ---------------- */
 const PRESETS = [
@@ -51,6 +60,43 @@ const MODE_TABS_FALLBACK = [
 
 const fmt = (n) => (Math.round(n * 10) / 10).toFixed(1);
 
+/* 由 SVG 导入状态构建调色板行（sid 用于把行与 SVG 颜色引用关联） */
+function paletteFromSvg(svgState) {
+  return svgState.selected.map((sid) => {
+    const c = svgState.colors.find((x) => x.sid === sid);
+    return { hex: c.hex, label: c.label, sid };
+  });
+}
+
+/** 重新解析原始文本并构建导入状态；sid 按文档顺序 c0..cn 稳定分配 */
+function buildSvgState(fileName, text, labelMap = [], selectedOverride = null) {
+  const { doc, colors, stats } = importSvgText(text);
+  if (!colors.length) {
+    throw new SvgParseError(
+      '未在 SVG 中发现可用的纯色 fill / stroke（已忽略 none、currentColor、渐变与外链资源）',
+    );
+  }
+  const withMeta = colors.map((c, i) => ({
+    ...c,
+    sid: `c${i}`,
+    originalHex: c.hex,
+    label: labelMap[i]?.label || `色 ${i + 1}`,
+  }));
+  const selected =
+    selectedOverride && selectedOverride.length
+      ? selectedOverride.filter((sid) => withMeta.some((c) => c.sid === sid))
+      : withMeta.slice(0, 8).map((c) => c.sid);
+  return {
+    fileName,
+    originalText: text,
+    doc,
+    currentText: serializeSvg(doc),
+    colors: withMeta,
+    selected,
+    stats,
+  };
+}
+
 export default function App() {
   const [modeMeta, setModeMeta] = useState(MODE_TABS_FALLBACK);
   const [palette, setPalette] = useState(PRESETS[0].colors);
@@ -70,37 +116,67 @@ export default function App() {
   const [rec, setRec] = useState(null);
   const [recLoading, setRecLoading] = useState(false);
 
+  // SVG 导入状态；null 表示当前未关联任何 SVG
+  const [svg, setSvg] = useState(null);
+  // 单调递增的校验请求序号，丢弃过期响应，防止快速勾选时旧结果覆盖新状态
+  const analyzeSeq = useRef(0);
+  // 始终持有最新 svg，供事件闭包（如 blur）读取，避免读到过期状态
+  const svgRef = useRef(null);
+  useEffect(() => {
+    svgRef.current = svg;
+  }, [svg]);
+  const paletteRef = useRef(palette);
+  useEffect(() => {
+    paletteRef.current = palette;
+  }, [palette]);
+
   useEffect(() => {
     getModes().then(setModeMeta).catch(() => {});
   }, []);
 
-  const payload = useMemo(
-    () => ({
-      colors: palette.map((c) => c.hex),
-      labels: palette.map((c) => c.label),
+  const payloadFor = useCallback(
+    (rows) => ({
+      colors: rows.map((c) => c.hex),
+      labels: rows.map((c) => c.label),
       modes: enabledModes,
       threshold: Number(threshold),
       severity: Number(severity),
     }),
-    [palette, enabledModes, threshold, severity],
+    [enabledModes, threshold, severity],
   );
 
-  const runAnalyze = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await analyze(payload);
-      setResult(data);
-      if (!data.modes.some((m) => m.id === activeMode)) {
-        setActiveMode(data.modes[0].id);
+  const payload = useMemo(() => payloadFor(palette), [payloadFor, palette]);
+
+  const analyzeRows = useCallback(
+    async (rows) => {
+      const seq = ++analyzeSeq.current;
+      if (rows.length < 2 || rows.length > 8) {
+        setResult(null);
+        setLoading(false);
+        setError(null);
+        return;
       }
-    } catch (e) {
-      setError(e.message);
-      setResult(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [payload, activeMode]);
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await analyze(payloadFor(rows));
+        if (seq !== analyzeSeq.current) return; // 已有更新的校验，丢弃过期响应
+        setResult(data);
+        if (!data.modes.some((m) => m.id === activeMode)) {
+          setActiveMode(data.modes[0].id);
+        }
+      } catch (e) {
+        if (seq !== analyzeSeq.current) return;
+        setError(e.message);
+        setResult(null);
+      } finally {
+        if (seq === analyzeSeq.current) setLoading(false);
+      }
+    },
+    [payloadFor, activeMode],
+  );
+
+  const runAnalyze = useCallback(() => analyzeRows(palette), [analyzeRows, palette]);
 
   // 首次加载自动校验一次
   useEffect(() => {
@@ -112,7 +188,7 @@ export default function App() {
   const updateColor = (i, patch) =>
     setPalette((ps) => ps.map((c, k) => (k === i ? { ...c, ...patch } : c)));
   const addColor = () => {
-    if (palette.length >= 8) return;
+    if (palette.length >= 8 || svg) return;
     const pool = ['#af7aa1', '#ff9da7', '#9c755f', '#bab0ac'];
     setPalette((ps) => [
       ...ps,
@@ -127,6 +203,106 @@ export default function App() {
       if (ms.includes(id)) return ms.length > 1 ? ms.filter((m) => m !== id) : ms;
       return [...ms, id];
     });
+
+  /* ---------- SVG 导入 ---------- */
+
+  /** 把某个 SVG 颜色（按 sid）的全部引用改写为 newHex，并刷新序列化文本 */
+  const rewriteSvgColor = (sid, newHex, base = svg) => {
+    const rec = base.colors.find((c) => c.sid === sid);
+    if (!rec) return base;
+    const target = String(newHex).trim().toLowerCase();
+    if (rec.hex.toLowerCase() === target) return base; // 已为目标值，无需改写
+    rewriteColor(rec.refs, newHex);
+    const colors = base.colors.map((c) => (c.sid === sid ? { ...c, hex: newHex } : c));
+    return { ...base, colors, currentText: serializeSvg(base.doc) };
+  };
+
+  /** 调色板行的颜色“提交”（选色器确认 / HEX 输入框失焦回车）：
+   *  若该行来自 SVG，则同步改写该色的全部引用。
+   *  注意：onChange 可能已把同一值写入 palette（输入中间态），
+   *  因此 SVG 改写不能依赖“值发生变化”的判断，提交时一律按当前值重写。 */
+  const commitRowColor = (i, value) => {
+    const row = paletteRef.current[i];
+    if (row?.sid) {
+      const norm = normalizeSolidColor(value);
+      if (norm && svgRef.current) {
+        setSvg((prev) => (prev ? rewriteSvgColor(row.sid, norm.hex, prev) : prev));
+      }
+    }
+    setPalette((ps) => (ps[i] && ps[i].hex !== value ? ps.map((c, k) => (k === i ? { ...c, hex: value } : c)) : ps));
+  };
+
+  const handleSvgFile = async (file) => {
+    // SvgParseError / “未发现颜色”错误会抛给面板显示；解析失败不改动现有调色板
+    const next = buildSvgState(file.name, file.text);
+    const rows = paletteFromSvg(next);
+    setSvg(next);
+    setPalette(rows);
+    setRec(null);
+    setTargetIndex(0);
+    setMarkedTarget(null);
+    await analyzeRows(rows);
+  };
+
+  const toggleSvgColor = (sid) => {
+    if (!svg) return;
+    let selected;
+    if (svg.selected.includes(sid)) {
+      selected = svg.selected.filter((x) => x !== sid);
+    } else {
+      if (svg.selected.length >= 8) return;
+      selected = [...svg.selected, sid];
+    }
+    const next = { ...svg, selected };
+    const rows = paletteFromSvg(next);
+    setSvg(next);
+    setPalette(rows);
+    setRec(null);
+    setTargetIndex((t) => Math.min(t, Math.max(0, rows.length - 1)));
+    analyzeRows(rows);
+  };
+
+  /** 移除 SVG 关联：调色板颜色保留为普通行，可继续手动编辑 */
+  const clearSvg = () => {
+    setSvg(null);
+    setPalette((ps) => ps.map(({ hex, label }) => ({ hex, label })));
+    setRec(null);
+  };
+
+  /** 用原始文本重新解析，撤销所有换色（保留勾选与标签） */
+  const resetSvg = () => {
+    if (!svg) return;
+    const next = buildSvgState(
+      svg.fileName,
+      svg.originalText,
+      svg.colors.map((c) => ({ label: c.label })),
+      svg.selected,
+    );
+    const rows = paletteFromSvg(next);
+    setSvg(next);
+    setPalette(rows);
+    setRec(null);
+    analyzeRows(rows);
+  };
+
+  const downloadSvg = (text, name) => {
+    const blob = new Blob([text], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  /** 切换预设：解除 SVG 关联 */
+  const applyPreset = (preset) => {
+    setSvg(null);
+    setPalette(preset.colors.map((c) => ({ ...c })));
+    setRec(null);
+  };
 
   /* ---------- 推荐 ---------- */
   const runRecommend = async () => {
@@ -144,12 +320,18 @@ export default function App() {
   };
 
   const applyCandidate = async (hex) => {
-    updateColor(targetIndex, { hex });
-    setMarkedTarget(targetIndex);
+    const target = Number(targetIndex);
+    // 来自 SVG 的颜色：同步改写该颜色在 SVG 中的全部引用（使用最新状态）
+    const row = paletteRef.current[target];
+    if (row?.sid && svgRef.current) {
+      setSvg((prev) => (prev ? rewriteSvgColor(row.sid, hex, prev) : prev));
+    }
+    setPalette((ps) => ps.map((c, i) => (i === target ? { ...c, hex } : c)));
+    setMarkedTarget(target);
     setLoading(true);
     setError(null);
     try {
-      const nextColors = palette.map((c, i) => (i === targetIndex ? hex : c.hex));
+      const nextColors = paletteRef.current.map((c, i) => (i === target ? hex : c.hex));
       const data = await analyze({
         colors: nextColors,
         modes: enabledModes,
@@ -170,23 +352,36 @@ export default function App() {
     <>
       <header className="app-header">
         <h1>🎨 色觉安全图例校验台</h1>
-        <p>线性 RGB 色觉模拟 → Lab CIEDE2000 全色对校验 → 锁定换色推荐</p>
+        <p>线性 RGB 色觉模拟 → Lab CIEDE2000 全色对校验 → 锁定换色推荐 · 支持 SVG 图例导入</p>
       </header>
 
       <div className="layout">
-        {/* ================= 左侧：编辑与设置 ================= */}
+        {/* ================= 左侧：导入 / 编辑与设置 ================= */}
         <div>
-          <section className="panel">
+          <SvgImportPanel
+            svg={svg}
+            onFile={handleSvgFile}
+            onToggleColor={toggleSvgColor}
+            onClear={clearSvg}
+          />
+
+          <section className="panel" style={{ marginTop: 18 }}>
             <h2>
               调色板
               <span className="hint">{palette.length} / 8 色（带标签，2–8 色）</span>
             </h2>
+            {svg && (
+              <p className="range-hint svg-linked-hint">
+                🔗 行来自 SVG 勾选，添加 / 删除请在上方「SVG 图例导入」中勾选；
+                修改颜色会同步改写 SVG 引用。
+              </p>
+            )}
             {palette.map((c, i) => (
               <div className="palette-row" key={i}>
                 <input
                   type="color"
-                  value={c.hex}
-                  onChange={(e) => updateColor(i, { hex: e.target.value })}
+                  value={/^#[0-9a-fA-F]{6}$/.test(c.hex) ? c.hex : '#000000'}
+                  onChange={(e) => commitRowColor(i, e.target.value)}
                   title="选色"
                 />
                 <input
@@ -194,6 +389,8 @@ export default function App() {
                   type="text"
                   value={c.hex}
                   onChange={(e) => updateColor(i, { hex: e.target.value })}
+                  onBlur={(e) => commitRowColor(i, e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && commitRowColor(i, e.target.value)}
                 />
                 <input
                   className="label-input"
@@ -205,21 +402,21 @@ export default function App() {
                 <button
                   className="icon-btn"
                   onClick={() => removeColor(i)}
-                  disabled={palette.length <= 2}
-                  title="删除该色"
+                  disabled={!!svg || palette.length <= 2}
+                  title={svg ? 'SVG 导入状态下请在上面勾选管理颜色' : '删除该色'}
                 >
                   ✕
                 </button>
               </div>
             ))}
             <div className="row-actions">
-              <button className="btn" onClick={addColor} disabled={palette.length >= 8}>
+              <button className="btn" onClick={addColor} disabled={!!svg || palette.length >= 8}>
                 ＋ 添加颜色
               </button>
             </div>
             <div className="preset-chips">
               {PRESETS.map((p) => (
-                <button key={p.name} onClick={() => setPalette(p.colors.map((c) => ({ ...c })))}>
+                <button key={p.name} onClick={() => applyPreset(p)}>
                   {p.name}
                 </button>
               ))}
@@ -308,15 +505,27 @@ export default function App() {
           />
         </div>
 
-        {/* ================= 右侧：结果 ================= */}
+        {/* ================= 右侧：SVG 预览 / 结果 ================= */}
         <div>
           {error && <div className="error-box">⚠ {error}</div>}
 
-          {!result && !error && <div className="empty-hint">配置调色板后点击“运行校验”。</div>}
+          {svg && (
+            <SvgPreviewPanel svg={svg} onReset={resetSvg} onDownload={downloadSvg} />
+          )}
+
+          {!result && !error && (!svg || svg.selected.length < 2) && (
+            <div className="empty-hint">
+              {svg
+                ? '请在左侧至少勾选 2 个 SVG 纯色，或移除 SVG 关联后手动配置调色板。'
+                : '配置调色板后点击“运行校验”，或先在左侧导入 SVG 图例。'}
+            </div>
+          )}
 
           {result && (
             <>
-              <ResultBanner result={result} modeMeta={modeMeta} />
+              <section className={svg ? 'panel' : ''} style={svg ? { marginTop: 18 } : undefined}>
+                <ResultBanner result={result} modeMeta={modeMeta} />
+              </section>
 
               <section className="panel">
                 <h2>各模式最差距离概览</h2>
@@ -376,7 +585,7 @@ export default function App() {
 
       <footer>
         Machado, Oliveira &amp; Fernandes (2009) CVD 矩阵 · CIEDE2000 (Sharma et al. 2005) ·
-        React + Express + culori
+        React + Express + culori · SVG 仅在浏览器本地解析，不上传服务器
       </footer>
     </>
   );

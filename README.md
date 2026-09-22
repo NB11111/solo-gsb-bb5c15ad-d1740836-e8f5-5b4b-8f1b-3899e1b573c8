@@ -84,6 +84,22 @@ npm start            # http://localhost:3000
   - 不达标色对清单，列出每个模式下的距离、最差模式与判定。
 - **替换色推荐**：选择待替换色（其余以锁定芯片列出）→ 生成推荐；
   候选卡片显示“跨模式最小 ΔE00”与“相对原色改变量”，★ 最优卡一键应用并重新校验。
+- **SVG 图例导入**（文件不出本机）：
+  - 点击 / 拖拽上传本地 `.svg`，前端在浏览器内解析所有图形元素的
+    `fill` / `stroke` 属性与**内联 `style`** 中的纯色值；
+  - 支持 **HEX（3/4/6/8 位）、`rgb()/rgba()`、`hsl()/hsla()`** 三种写法，
+    等价颜色按 sRGB HEX 归一化去重（如 `#d62728` 与 `rgb(214,39,40)` 合并为一项），
+    并保留每一项的元素 / 属性引用清单（fill×n、stroke×n、所属元素）；
+  - `none`、`transparent`、`currentColor`、`inherit`、`url(#…)` 渐变 / 图案引用、
+    具名色等非纯色写法，以及半透明色（alpha < 1）一律忽略并分类计数提示；
+  - 勾选 2–8 个导入色即直接进入上方多模式校验与替换推荐；
+  - 应用候选色（或在调色板中改色）时，**同步改写该颜色在 SVG 中的全部引用**，
+    属性与内联样式分别精确替换、保留样式中的其它声明；
+  - 右侧提供原图 / 改写图并排预览、修改清单、**修改后 SVG 下载**
+    （默认文件名 `<原名>-cvd-fixed.svg`）与“一键还原”；
+  - 解析失败（非 SVG、XML 语法错误、空文件）或未发现可用纯色时给出明确中文提示。
+  - 仓库附带 `client/public/sample-legend.svg` 示例（含等价写法、内联样式、
+    渐变 / currentColor / 半透明等忽略场景）。
 
 ## HTTP API
 
@@ -123,5 +139,19 @@ npm start            # http://localhost:3000
 └── client/
     ├── vite.config.js      # /api 代理 → :3000
     ├── index.html
-    └── src/                # React 应用（App.jsx / api.js / styles.css）
+    ├── public/
+    │   └── sample-legend.svg  # SVG 导入示例
+    └── src/
+        ├── App.jsx             # React 应用（调色板 / 校验 / 推荐 / SVG 状态编排）
+        ├── api.js
+        ├── svg-import.js       # SVG 纯色解析、归一化去重与引用级改写（纯前端）
+        ├── SvgImportPanel.jsx  # 上传 / 勾选 / 引用清单面板
+        ├── SvgPreviewPanel.jsx # 原图 / 改写图预览与下载
+        └── styles.css
 ```
+
+## SVG 导入与隐私
+
+SVG 导入**完全在浏览器本地完成**：文件通过 `File.text()` 读取、
+`DOMParser` 解析，全程不发起任何上传请求，服务端无新增接口、不接触文件内容；
+下载同样由浏览器端 `Blob` 生成。
